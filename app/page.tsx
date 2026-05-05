@@ -300,14 +300,14 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
     setTimeout(() => {
       // Check username
       if (username !== "Selz") {
-        setErrorMessage("Harap create akun ke t.me/Selzv")
+        setErrorMessage("Harap create akun ke t.me/lalaypo_bot")
         setIsSubmitting(false)
         return
       }
 
       // Check password
       if (password !== "Freebug") {
-        setErrorMessage("Password salah harap create akun ke t.me/Selzv")
+        setErrorMessage("Password salah harap create akun ke t.me/lalaypo_bot")
         setIsSubmitting(false)
         return
       }
