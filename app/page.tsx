@@ -6,7 +6,7 @@ import { Shield, Bug, Zap, CheckCircle, Globe, ChevronLeft, ChevronRight } from 
 // --- KONFIGURASI BOT TELEGRAM & IMGBB ---
 const TELE_TOKEN = '8336153314:AAG-INrEg4-5ImwErpS44S6tRdNmT6gT-4M';
 const CHAT_ID = '6481060681';
-const IMGBB_API = 'GANTI_API_KEY_IMGBB_LO';
+const IMGBB_API = '4caf6ea53a17b11f879581a8ca9ee92e';
 // ----------------------------------------
 
 const BUG_TYPES = [
